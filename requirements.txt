@@ -1,0 +1,16 @@
+Django>=5.1,<5.2
+djangorestframework>=3.15
+drf-spectacular>=0.27  # OpenAPI 3 schema + Swagger UI + ReDoc
+PyNaCl>=1.5           # libsodium bindings — Ed25519 signature verification only
+python-dotenv>=1.0
+psycopg2-binary>=2.9  # PostgreSQL driver (prod); dev falls back to SQLite
+
+# Feature: calling / websocket push
+channels>=4.1         # ASGI WebSocket framework
+daphne>=4.1           # ASGI server (also drives runserver in dev)
+channels-redis>=4.2   # Redis channel layer (prod only; dev uses in-memory)
+
+# Feature: S3 blob store
+boto3>=1.34           # S3-compatible object storage (prod; dev uses local FS)
+
+gunicorn>=22.0        # WSGI (optional; prefer daphne/uvicorn for ASGI in prod)
