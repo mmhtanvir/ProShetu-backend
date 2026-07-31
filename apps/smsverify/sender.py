@@ -52,6 +52,51 @@ class TwilioSender:
             return False
 
 
+class WhatsAppSender:
+    """Sends the code as a WhatsApp message via Twilio, using a
+    pre-approved Content Template (WhatsApp requires business-
+    initiated messages to use an approved template — free-text body
+    isn't allowed outside an existing customer-service window). Needs
+    TWILIO_SID/TWILIO_TOKEN/TWILIO_WHATSAPP_FROM/
+    TWILIO_WHATSAPP_CONTENT_SID set and SMS_SENDER=whatsapp to be
+    selected by get_sender().
+    """
+    def __init__(self):
+        cfg = settings.SMS
+        self.sid = cfg.get("TWILIO_SID")
+        self.token = cfg.get("TWILIO_TOKEN")
+        self.from_ = cfg.get("TWILIO_WHATSAPP_FROM")
+        self.content_sid = cfg.get("TWILIO_WHATSAPP_CONTENT_SID")
+        if not (self.sid and self.token and self.from_ and self.content_sid):
+            raise RuntimeError(
+                "SMS_SENDER=whatsapp but TWILIO_SID/TWILIO_TOKEN/"
+                "TWILIO_WHATSAPP_FROM/TWILIO_WHATSAPP_CONTENT_SID "
+                "are not all set"
+            )
+
+    def send_code(self, msisdn: str, code: str) -> bool:
+        import json
+
+        from twilio.base.exceptions import TwilioRestException
+        from twilio.rest import Client
+
+        try:
+            Client(self.sid, self.token).messages.create(
+                to=f"whatsapp:{msisdn}",
+                from_=f"whatsapp:{self.from_}",
+                content_sid=self.content_sid,
+                content_variables=json.dumps({"1": code}),
+            )
+            return True
+        except TwilioRestException:
+            log.exception("WhatsApp send failed for %s...", msisdn[:4])
+            return False
+
+
 def get_sender():
     backend = settings.SMS["SENDER"]
-    return TwilioSender() if backend == "twilio" else ConsoleSender()
+    if backend == "twilio":
+        return TwilioSender()
+    if backend == "whatsapp":
+        return WhatsAppSender()
+    return ConsoleSender()

@@ -176,7 +176,7 @@ IDV = {
 # only a keyed hash (needs SMS_PEPPER set in prod).
 SMS = {
     "REQUIRE_SMS_VERIFICATION": os.getenv("REQUIRE_SMS_VERIFICATION", "0") == "1",
-    "SENDER": os.getenv("SMS_SENDER", "console"),   # "console" | "twilio"
+    "SENDER": os.getenv("SMS_SENDER", "console"),   # "console" | "twilio" | "whatsapp"
     "PEPPER": os.getenv("SMS_PEPPER", "dev-insecure-sms-pepper"),
     # Region used to interpret numbers typed without a leading "+" (e.g. a
     # national "01712345678"). Leave unset to require every number include
@@ -187,6 +187,12 @@ SMS = {
     "TWILIO_SID": os.getenv("TWILIO_SID", ""),
     "TWILIO_TOKEN": os.getenv("TWILIO_TOKEN", ""),
     "TWILIO_FROM": os.getenv("TWILIO_FROM", ""),
+    # WhatsApp sender (apps/smsverify/sender.py::WhatsAppSender) — a
+    # WhatsApp-enabled Twilio number, and the SID of a pre-approved
+    # Content Template (Meta requires business-initiated messages to
+    # use one; free-text body isn't allowed).
+    "TWILIO_WHATSAPP_FROM": os.getenv("TWILIO_WHATSAPP_FROM", ""),
+    "TWILIO_WHATSAPP_CONTENT_SID": os.getenv("TWILIO_WHATSAPP_CONTENT_SID", ""),
 }
 
 # --- Channels / WebSocket push --------------------------------------------
