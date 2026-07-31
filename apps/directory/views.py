@@ -74,23 +74,51 @@ def register(request):
     """
     # Optional SMS-verification gate (architecture §14). When the deployment
     # sets REQUIRE_SMS_VERIFICATION, a single-use registration token from the
-    # isolated smsverify service is required. The token is consumed and its
-    # association discarded, so the created identity is NOT bound to a phone
-    # number in anything the sync core can read.
+    # isolated smsverify service is required. The sync core never sees this
+    # link (Identity/PreKeyBundle gain no phone-derived field below) — but
+    # unlike registration tokens themselves, the phone hash <-> mailbox_id
+    # pairing IS now kept in apps.smsverify.PhoneDirectoryEntry, by product
+    # decision, so a contact search (/v1/sms/lookup) can find this account.
     from django.conf import settings as dj_settings
+    msisdn_hash = ""
     if dj_settings.SMS["REQUIRE_SMS_VERIFICATION"]:
-        from apps.smsverify.models import RegistrationToken
+        from apps.smsverify.models import RegisteredNumber, RegistrationToken
         tok = request.data.get("registration_token", "")
         rt = RegistrationToken.objects.filter(token=tok).first()
         if rt is None or not rt.is_valid():
             return Response({"detail": "valid registration_token required"},
                             status=status.HTTP_403_FORBIDDEN)
+        msisdn_hash = rt.msisdn_hash
+        # Re-check here (not just at /v1/sms/request): closes the race
+        # where two verified tokens for the same number both reach this
+        # point before either has been marked registered below.
+        if msisdn_hash and RegisteredNumber.objects.filter(
+            msisdn_hash=msisdn_hash
+        ).exists():
+            rt.consumed = True
+            rt.save(update_fields=["consumed"])
+            return Response({"detail": "This phone number is already registered"},
+                            status=status.HTTP_409_CONFLICT)
         rt.consumed = True
         rt.save(update_fields=["consumed"])
 
     ser = RegisterSerializer(data=request.data)
     ser.is_valid(raise_exception=True)
     identity = ser.save()
+
+    if msisdn_hash:
+        RegisteredNumber.objects.get_or_create(msisdn_hash=msisdn_hash)
+        display_name = str(request.data.get("display_name", "")).strip()
+        if display_name:
+            from apps.smsverify.models import PhoneDirectoryEntry
+            PhoneDirectoryEntry.objects.update_or_create(
+                msisdn_hash=msisdn_hash,
+                defaults={
+                    "mailbox_id": str(identity.mailbox_id),
+                    "display_name": display_name,
+                },
+            )
+
     return Response(IdentityPublicSerializer(identity).data,
                     status=status.HTTP_201_CREATED)
 
