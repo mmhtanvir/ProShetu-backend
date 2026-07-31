@@ -33,15 +33,38 @@ import hashlib
 import hmac
 import secrets
 
+import phonenumbers
+from phonenumbers import NumberParseException
+
 from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
 
+def normalize_msisdn(msisdn: str) -> str:
+    """Canonicalise to E.164 so the same real-world number hashes the same
+    way regardless of how it was typed (spacing, dashes, leading zeros,
+    missing '+', etc.) — signup and lookup must agree bit-for-bit or the
+    directory match silently misses. Raises ValueError if unparseable."""
+    region = settings.SMS.get("DEFAULT_REGION")
+    try:
+        parsed = phonenumbers.parse(msisdn, region)
+    except NumberParseException as exc:
+        raise ValueError(f"invalid phone number: {exc}") from exc
+    # is_possible (length/shape plausible) rather than is_valid (actually
+    # assigned): we only need a consistent canonical form, and is_valid
+    # rejects real-looking but unassigned ranges (e.g. NANP 555-XXXX
+    # outside the 555-0100..0199 fictitious block) that show up in tests
+    # and some legitimate edge cases.
+    if not phonenumbers.is_possible_number(parsed):
+        raise ValueError("invalid phone number")
+    return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
+
+
 def hash_msisdn(msisdn: str) -> str:
     """Keyed hash of a normalised phone number. Never store the raw number."""
     pepper = settings.SMS["PEPPER"].encode()
-    norm = msisdn.strip().replace(" ", "")
+    norm = normalize_msisdn(msisdn)
     return hmac.new(pepper, norm.encode(), hashlib.blake2b).hexdigest()[:64]
 
 

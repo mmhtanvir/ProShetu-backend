@@ -17,5 +17,6 @@ boto3>=1.34           # S3-compatible object storage (prod; dev uses local FS)
 # only needed when SMS_SENDER=twilio; dev/CI default (console) doesn't
 # import this at all.
 twilio>=9.0
+phonenumbers>=8.13    # E.164 normalization so the same number always hashes the same
 
 gunicorn>=22.0        # WSGI (optional; prefer daphne/uvicorn for ASGI in prod)

@@ -33,7 +33,12 @@ def request_code(request):
     if not msisdn or len(msisdn) < 6:
         return Response({"detail": "valid msisdn required"},
                         status=status.HTTP_400_BAD_REQUEST)
-    if RegisteredNumber.objects.filter(msisdn_hash=hash_msisdn(msisdn)).exists():
+    try:
+        msisdn_hash = hash_msisdn(msisdn)
+    except ValueError:
+        return Response({"detail": "invalid phone number"},
+                        status=status.HTTP_400_BAD_REQUEST)
+    if RegisteredNumber.objects.filter(msisdn_hash=msisdn_hash).exists():
         return Response({"detail": "This phone number is already registered"},
                         status=status.HTTP_409_CONFLICT)
     rec, code = PhoneVerification.start(msisdn)
@@ -94,8 +99,13 @@ def lookup_by_phone(request):
     if not msisdn:
         return Response({"detail": "msisdn required"},
                         status=status.HTTP_400_BAD_REQUEST)
+    try:
+        msisdn_hash = hash_msisdn(msisdn)
+    except ValueError:
+        return Response({"detail": "invalid phone number"},
+                        status=status.HTTP_400_BAD_REQUEST)
     entry = PhoneDirectoryEntry.objects.filter(
-        msisdn_hash=hash_msisdn(msisdn)
+        msisdn_hash=msisdn_hash
     ).first()
     if entry is None:
         return Response({"detail": "no account found for this number"},

@@ -178,6 +178,10 @@ SMS = {
     "REQUIRE_SMS_VERIFICATION": os.getenv("REQUIRE_SMS_VERIFICATION", "0") == "1",
     "SENDER": os.getenv("SMS_SENDER", "console"),   # "console" | "twilio"
     "PEPPER": os.getenv("SMS_PEPPER", "dev-insecure-sms-pepper"),
+    # Region used to interpret numbers typed without a leading "+" (e.g. a
+    # national "01712345678"). Leave unset to require every number include
+    # its country code.
+    "DEFAULT_REGION": os.getenv("SMS_DEFAULT_REGION") or None,
     "CODE_TTL": int(os.getenv("SMS_CODE_TTL", "600")),    # 10 min
     "TOKEN_TTL": int(os.getenv("SMS_TOKEN_TTL", "600")),  # 10 min
     "TWILIO_SID": os.getenv("TWILIO_SID", ""),
