@@ -12,6 +12,7 @@ from rest_framework.throttling import ScopedRateThrottle
 from drf_spectacular.utils import extend_schema, OpenApiExample, inline_serializer
 from rest_framework import serializers as drf_serializers
 
+from apps.common import fcm
 from apps.common.openapi import AUTH_HEADERS
 from apps.common.validators import snap_to_bucket
 from apps.directory.models import Identity
@@ -101,7 +102,13 @@ def sync(request):
             )
             accepted.append(obj.event_id)
             if _created:
-                push_to_mailbox(str(e["recipient_mailbox"]), {"type": "event", "event_id": obj.event_id, "priority": obj.priority})
+                delivered_live = push_to_mailbox(str(e["recipient_mailbox"]), {"type": "event", "event_id": obj.event_id, "priority": obj.priority})
+                if not delivered_live:
+                    token = Identity.objects.filter(
+                        mailbox_id=e["recipient_mailbox"]
+                    ).values_list("fcm_token", flat=True).first()
+                    if token:
+                        fcm.notify_message(token, obj.event_id, obj.priority)
 
         # NOTE: bulk blob fragments are NOT ingested here anymore. Large
         # ciphertext does not belong in the batch JSON body; it goes to object

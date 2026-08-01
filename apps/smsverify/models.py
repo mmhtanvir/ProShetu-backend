@@ -73,18 +73,27 @@ def hash_code(code: str, salt: str) -> str:
 
 
 class PhoneVerification(models.Model):
-    """A pending or completed verification, keyed by MSISDN hash only."""
+    """A pending or completed verification, keyed by MSISDN hash only.
+
+    `purpose` distinguishes a first-time signup verification from an
+    account-recovery re-verification of a number that's already
+    registered — request_code()/verify_code() branch their
+    RegisteredNumber checks on it, and it's carried onto the
+    RegistrationToken this verification issues so /v1/register and
+    /v1/recover can each reject the other's tokens.
+    """
     msisdn_hash = models.CharField(max_length=64, db_index=True)
     code_hash = models.CharField(max_length=64)
     code_salt = models.CharField(max_length=32)
     attempts = models.PositiveSmallIntegerField(default=0)
+    purpose = models.CharField(max_length=16, default="signup")
     created_at = models.DateTimeField(auto_now_add=True)
     verified_at = models.DateTimeField(null=True, blank=True)
 
     MAX_ATTEMPTS = 5
 
     @classmethod
-    def start(cls, msisdn: str):
+    def start(cls, msisdn: str, purpose: str = "signup"):
         """Create a verification and return (record, plaintext_code)."""
         code = f"{secrets.randbelow(1_000_000):06d}"
         salt = secrets.token_hex(8)
@@ -92,6 +101,7 @@ class PhoneVerification(models.Model):
             msisdn_hash=hash_msisdn(msisdn),
             code_hash=hash_code(code, salt),
             code_salt=salt,
+            purpose=purpose,
         )
         return rec, code
 
@@ -122,16 +132,23 @@ class RegistrationToken(models.Model):
     at the moment the token is redeemed. It never touches Identity/PreKeyBundle
     and is not queryable from the sync core, so the phone-hash <-> identity
     link this app exists to avoid is still never made.
+
+    `purpose` (carried over from the [PhoneVerification] that issued it)
+    hard-blocks a signup token being redeemed at /v1/recover or a
+    recovery token being redeemed at /v1/register.
     """
     token = models.CharField(max_length=64, unique=True, db_index=True)
     msisdn_hash = models.CharField(max_length=64, blank=True, default="")
+    purpose = models.CharField(max_length=16, default="signup")
     created_at = models.DateTimeField(auto_now_add=True)
     consumed = models.BooleanField(default=False)
 
     @classmethod
-    def issue(cls, msisdn_hash: str = ""):
+    def issue(cls, msisdn_hash: str = "", purpose: str = "signup"):
         return cls.objects.create(
-            token=secrets.token_urlsafe(32), msisdn_hash=msisdn_hash
+            token=secrets.token_urlsafe(32),
+            msisdn_hash=msisdn_hash,
+            purpose=purpose,
         )
 
     def is_valid(self) -> bool:

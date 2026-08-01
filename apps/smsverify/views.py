@@ -28,8 +28,18 @@ class SmsThrottle(ScopedRateThrottle):
 @permission_classes([AllowAny])
 @throttle_classes([SmsThrottle])
 def request_code(request):
-    """Send a 6-digit code to a phone number. Stores only its hash."""
+    """Send a 6-digit code to a phone number. Stores only its hash.
+
+    `purpose` ("signup", the default, or "recovery") decides which
+    way the RegisteredNumber check runs: signup requires the number
+    NOT already be registered (unchanged 409 below); recovery requires
+    the opposite — there must be an account to recover.
+    """
     msisdn = str(request.data.get("msisdn", "")).strip()
+    purpose = str(request.data.get("purpose", "signup"))
+    if purpose not in ("signup", "recovery"):
+        return Response({"detail": "purpose must be 'signup' or 'recovery'"},
+                        status=status.HTTP_400_BAD_REQUEST)
     if not msisdn or len(msisdn) < 6:
         return Response({"detail": "valid msisdn required"},
                         status=status.HTTP_400_BAD_REQUEST)
@@ -38,10 +48,16 @@ def request_code(request):
     except ValueError:
         return Response({"detail": "invalid phone number"},
                         status=status.HTTP_400_BAD_REQUEST)
-    if RegisteredNumber.objects.filter(msisdn_hash=msisdn_hash).exists():
+    already_registered = RegisteredNumber.objects.filter(
+        msisdn_hash=msisdn_hash
+    ).exists()
+    if purpose == "signup" and already_registered:
         return Response({"detail": "This phone number is already registered"},
                         status=status.HTTP_409_CONFLICT)
-    rec, code = PhoneVerification.start(msisdn)
+    if purpose == "recovery" and not already_registered:
+        return Response({"detail": "no account registered with this number"},
+                        status=status.HTTP_404_NOT_FOUND)
+    rec, code = PhoneVerification.start(msisdn, purpose=purpose)
     if not get_sender().send_code(msisdn, code):
         # Delivery failed (e.g. Twilio rejected the number) — don't leave
         # the caller polling for a code that will never arrive, and don't
@@ -74,7 +90,7 @@ def verify_code(request):
     if not rec.try_code(code):
         return Response({"detail": "invalid or expired code"},
                         status=status.HTTP_400_BAD_REQUEST)
-    token = RegistrationToken.issue(msisdn_hash=rec.msisdn_hash)
+    token = RegistrationToken.issue(msisdn_hash=rec.msisdn_hash, purpose=rec.purpose)
     return Response({"registration_token": token.token})
 
 

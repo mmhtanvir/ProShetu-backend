@@ -22,10 +22,33 @@ class RegisterSerializer(serializers.Serializer):
         return identity
 
 
+class RecoverSerializer(serializers.Serializer):
+    """Redeem a recovery-purpose registration token for a fresh
+    identity bound to an already-registered phone number. See
+    views.recover() — this never touches RegisteredNumber (same
+    phone, already recorded); it only mints a new Identity and
+    repoints PhoneDirectoryEntry at it.
+    """
+    registration_token = serializers.CharField()
+    ed25519_pub = serializers.CharField()
+    x25519_pub = serializers.CharField()
+    display_name = serializers.CharField(required=False, allow_blank=True)
+
+    def validate_ed25519_pub(self, v):
+        return validate_hex(v, 32)
+
+    def validate_x25519_pub(self, v):
+        return validate_hex(v, 32)
+
+
 class IdentityPublicSerializer(serializers.ModelSerializer):
     class Meta:
         model = Identity
         fields = ["mailbox_id", "ed25519_pub", "x25519_pub"]
+
+
+class FcmTokenSerializer(serializers.Serializer):
+    fcm_token = serializers.CharField(max_length=255)
 
 
 class PreKeyUploadSerializer(serializers.Serializer):

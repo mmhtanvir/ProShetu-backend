@@ -1,4 +1,5 @@
 from django.db import transaction
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import (
     api_view, authentication_classes, permission_classes, throttle_classes,
@@ -16,8 +17,8 @@ from apps.common.openapi import AUTH_HEADERS
 from apps.common.validators import validate_hex
 from .models import Identity, PreKeyBundle
 from .serializers import (
-    RegisterSerializer, IdentityPublicSerializer,
-    PreKeyUploadSerializer, PreKeyBundleSerializer,
+    RegisterSerializer, RecoverSerializer, IdentityPublicSerializer,
+    FcmTokenSerializer, PreKeyUploadSerializer, PreKeyBundleSerializer,
 )
 
 
@@ -27,6 +28,14 @@ class ChallengeThrottle(ScopedRateThrottle):
 
 class RegisterThrottle(ScopedRateThrottle):
     scope = "register"
+
+
+class RecoverThrottle(ScopedRateThrottle):
+    scope = "recover"
+
+
+class FcmThrottle(ScopedRateThrottle):
+    scope = "fcm"
 
 
 @extend_schema(
@@ -85,7 +94,13 @@ def register(request):
         from apps.smsverify.models import RegisteredNumber, RegistrationToken
         tok = request.data.get("registration_token", "")
         rt = RegistrationToken.objects.filter(token=tok).first()
-        if rt is None or not rt.is_valid():
+        if rt is None or not rt.is_valid() or rt.purpose != "signup":
+            # The purpose check must come before any consuming branch
+            # below: a recovery-purpose token would otherwise fall
+            # through to the "already registered" 409 (its phone IS
+            # already registered) and get burned there, silently
+            # breaking /v1/recover for a client that hit the wrong
+            # endpoint rather than getting a clear rejection here.
             return Response({"detail": "valid registration_token required"},
                             status=status.HTTP_403_FORBIDDEN)
         msisdn_hash = rt.msisdn_hash
@@ -124,6 +139,75 @@ def register(request):
 
 
 @extend_schema(
+    tags=["directory"], summary="Recover an account with a new identity",
+    request=RecoverSerializer, responses=IdentityPublicSerializer,
+)
+@api_view(["POST"])
+@authentication_classes([])
+@permission_classes([AllowAny])
+@throttle_classes([RecoverThrottle])
+def recover(request):
+    """Mint a fresh directory identity for an already-registered phone
+    number, replacing the one it was previously bound to.
+
+    Requires a `registration_token` issued for purpose="recovery" (see
+    apps.smsverify) — this is deliberately a separate token namespace
+    from /v1/register's, so a signup token can never be redeemed here
+    and vice versa. The old Identity/PreKeyBundle rows for this phone
+    are left as-is (nothing references them by phone, and nothing else
+    FKs to Identity.mailbox_id) — same "ages out, never explicitly
+    forgotten" philosophy as local device-key destruction.
+    """
+    from django.conf import settings as dj_settings
+    if not dj_settings.SMS["REQUIRE_SMS_VERIFICATION"]:
+        return Response(
+            {"detail": "account recovery is unavailable on this deployment"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    from apps.smsverify.models import PhoneDirectoryEntry, RegisteredNumber, RegistrationToken
+
+    ser = RecoverSerializer(data=request.data)
+    ser.is_valid(raise_exception=True)
+    validated = ser.validated_data
+
+    tok = validated["registration_token"]
+    rt = RegistrationToken.objects.filter(token=tok).first()
+    if rt is None or not rt.is_valid() or rt.purpose != "recovery":
+        return Response({"detail": "valid recovery registration_token required"},
+                        status=status.HTTP_403_FORBIDDEN)
+    rt.consumed = True
+    rt.save(update_fields=["consumed"])
+
+    msisdn_hash = rt.msisdn_hash
+    if not msisdn_hash or not RegisteredNumber.objects.filter(
+        msisdn_hash=msisdn_hash
+    ).exists():
+        return Response({"detail": "no account registered with this number"},
+                        status=status.HTTP_404_NOT_FOUND)
+
+    identity, _ = Identity.objects.get_or_create(
+        ed25519_pub=validated["ed25519_pub"],
+        defaults={"x25519_pub": validated["x25519_pub"]},
+    )
+
+    old_entry = PhoneDirectoryEntry.objects.filter(msisdn_hash=msisdn_hash).first()
+    display_name = validated.get("display_name", "").strip() or (
+        old_entry.display_name if old_entry else ""
+    )
+    PhoneDirectoryEntry.objects.update_or_create(
+        msisdn_hash=msisdn_hash,
+        defaults={
+            "mailbox_id": str(identity.mailbox_id),
+            "display_name": display_name,
+        },
+    )
+
+    return Response(IdentityPublicSerializer(identity).data,
+                    status=status.HTTP_201_CREATED)
+
+
+@extend_schema(
     tags=["directory"], summary="Upload/replace this identity's prekey bundle",
     parameters=AUTH_HEADERS, request=PreKeyUploadSerializer, responses={204: None},
 )
@@ -140,6 +224,32 @@ def upload_prekeys(request):
                         status=status.HTTP_404_NOT_FOUND)
     PreKeyBundle.objects.update_or_create(
         identity=identity, defaults=ser.validated_data
+    )
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@extend_schema(
+    tags=["directory"], summary="Register/update this device's FCM token",
+    parameters=AUTH_HEADERS, request=FcmTokenSerializer, responses={204: None},
+)
+@api_view(["POST"])
+@throttle_classes([FcmThrottle])
+def update_fcm_token(request):
+    """Authenticated: register/update this identity's FCM registration
+    token, used as apps.common.fcm's fallback wake-up path when
+    push_to_mailbox() has no live WebSocket to deliver to.
+    """
+    ser = FcmTokenSerializer(data=request.data)
+    ser.is_valid(raise_exception=True)
+    identity = Identity.objects.filter(
+        ed25519_pub=request.user.ed25519_pub
+    ).first()
+    if identity is None:
+        return Response({"detail": "register first"},
+                        status=status.HTTP_404_NOT_FOUND)
+    Identity.objects.filter(mailbox_id=identity.mailbox_id).update(
+        fcm_token=ser.validated_data["fcm_token"],
+        fcm_token_updated_at=timezone.now(),
     )
     return Response(status=status.HTTP_204_NO_CONTENT)
 

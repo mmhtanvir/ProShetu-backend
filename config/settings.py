@@ -93,12 +93,14 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_THROTTLE_RATES": {
         "register": "20/hour",
+        "recover": "20/hour",
         "sync": "600/hour",
         "challenge": "600/hour",
         "coord": "600/hour",
         "call": "1200/hour",
         "sms": "10/hour",
         "idv": "60/hour",
+        "fcm": "60/hour",
     },
     "UNAUTHENTICATED_USER": None,
     "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
@@ -193,6 +195,15 @@ SMS = {
     # use one; free-text body isn't allowed).
     "TWILIO_WHATSAPP_FROM": os.getenv("TWILIO_WHATSAPP_FROM", ""),
     "TWILIO_WHATSAPP_CONTENT_SID": os.getenv("TWILIO_WHATSAPP_CONTENT_SID", ""),
+}
+
+# --- FCM (apps/common/fcm.py) ----------------------------------------------
+# Fallback wake-up path for calling/sync when push_to_mailbox() (live
+# WebSocket) has no connected socket. Blank CREDENTIALS_PATH = disabled
+# (dev-safe default) — fcm.py no-ops rather than erroring, same as the
+# SMS "console" backend does when no real sender is configured.
+FCM = {
+    "CREDENTIALS_PATH": os.getenv("FCM_CREDENTIALS_PATH", ""),
 }
 
 # --- Channels / WebSocket push --------------------------------------------

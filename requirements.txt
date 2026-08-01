@@ -20,3 +20,7 @@ twilio>=9.0
 phonenumbers>=8.13    # E.164 normalization so the same number always hashes the same
 
 gunicorn>=22.0        # WSGI (optional; prefer daphne/uvicorn for ASGI in prod)
+
+# Feature: FCM push (apps/common/fcm.py) — only imported when
+# FCM_CREDENTIALS_PATH is set; dev/CI default (unset) doesn't touch it.
+firebase-admin>=6.5

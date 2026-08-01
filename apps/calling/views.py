@@ -8,6 +8,7 @@ from apps.directory.models import Identity
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import serializers as drf_serializers
 
+from apps.common import fcm
 from apps.common.openapi import AUTH_HEADERS
 from apps.common.push import push_to_mailbox
 from .models import CallSignal
@@ -50,12 +51,22 @@ def signal(request):
     )
     # Best-effort instant delivery over WebSocket (feature: push). Falls back to
     # the callee's next /call/poll if no socket is connected.
-    push_to_mailbox(str(v["recipient_mailbox"]), {
+    delivered_live = push_to_mailbox(str(v["recipient_mailbox"]), {
         "type": "call_signal",
         "call_id": sig.call_id,
         "kind": sig.kind,
         "seq": sig.seq,
     })
+    # No live socket to wake the callee — fall further back to FCM, but
+    # only for a fresh call invite ("offer"). Mid-call signals
+    # (candidate/answer/ringing/hangup/busy) only happen once the app
+    # is already live, so there's nothing useful an FCM wake buys there.
+    if not delivered_live and v["kind"] == "offer":
+        token = Identity.objects.filter(
+            mailbox_id=v["recipient_mailbox"]
+        ).values_list("fcm_token", flat=True).first()
+        if token:
+            fcm.notify_call(token, sig.call_id, sig.kind)
     return Response({"id": sig.id}, status=status.HTTP_201_CREATED)
 
 

@@ -21,6 +21,15 @@ class Identity(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     last_seen_bucket = models.CharField(max_length=32, blank=True, default="")
 
+    # Opaque FCM registration token for this mailbox's device, used by
+    # apps.common.fcm as a fallback wake-up path when push_to_mailbox()
+    # (apps.common.push, live WebSocket only) has no connected socket
+    # to deliver to. Blank means this device hasn't registered one
+    # (or FCM isn't configured) — callers must treat that as "can't
+    # push, client will pick it up on next poll", never an error.
+    fcm_token = models.CharField(max_length=255, blank=True, default="")
+    fcm_token_updated_at = models.DateTimeField(null=True, blank=True)
+
 
 class PreKeyBundle(models.Model):
     """
