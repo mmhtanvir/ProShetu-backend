@@ -15,10 +15,11 @@ from rest_framework import serializers as drf_serializers
 from apps.common.models import Challenge
 from apps.common.openapi import AUTH_HEADERS
 from apps.common.validators import validate_hex
-from .models import Identity, PreKeyBundle
+from .models import Identity, IdentityBackup, PreKeyBundle
 from .serializers import (
     RegisterSerializer, RecoverSerializer, IdentityPublicSerializer,
     FcmTokenSerializer, PreKeyUploadSerializer, PreKeyBundleSerializer,
+    BackupUploadSerializer, BackupFetchSerializer, IdentityBackupSerializer,
 )
 
 
@@ -36,6 +37,10 @@ class RecoverThrottle(ScopedRateThrottle):
 
 class FcmThrottle(ScopedRateThrottle):
     scope = "fcm"
+
+
+class BackupThrottle(ScopedRateThrottle):
+    scope = "backup"
 
 
 @extend_schema(
@@ -276,4 +281,99 @@ def fetch_prekeys(request, mailbox_id):
                             status=status.HTTP_404_NOT_FOUND)
         otk = bundle.take_one_time_prekey()
     data = PreKeyBundleSerializer(bundle, context={"one_time_prekey": otk}).data
+    return Response(data)
+
+
+@extend_schema(
+    tags=["directory"], summary="Upload/replace this identity's encrypted key backup",
+    parameters=AUTH_HEADERS, request=BackupUploadSerializer, responses={204: None},
+)
+@api_view(["POST"])
+@throttle_classes([BackupThrottle])
+def upload_backup(request):
+    """Authenticated: store/replace this identity's encrypted backup
+    blob, keyed by its phone number (see IdentityBackup). Requires the
+    identity to have gone through SMS-verified registration — no
+    phone, no msisdn_hash to key the backup by, so recovery-by-
+    Encryption-ID has nothing to look it up against later.
+    """
+    ser = BackupUploadSerializer(data=request.data)
+    ser.is_valid(raise_exception=True)
+
+    from apps.smsverify.models import PhoneDirectoryEntry
+
+    identity = Identity.objects.filter(
+        ed25519_pub=request.user.ed25519_pub
+    ).first()
+    if identity is None:
+        return Response({"detail": "register first"},
+                        status=status.HTTP_404_NOT_FOUND)
+    entry = PhoneDirectoryEntry.objects.filter(
+        mailbox_id=str(identity.mailbox_id)
+    ).first()
+    if entry is None:
+        return Response(
+            {"detail": "backup requires SMS-verified registration with a phone number"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    IdentityBackup.objects.update_or_create(
+        msisdn_hash=entry.msisdn_hash,
+        defaults={"encrypted_bundle": ser.validated_data["encrypted_bundle"]},
+    )
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@extend_schema(
+    tags=["directory"], summary="Fetch this phone number's encrypted key backup",
+    request=BackupFetchSerializer,
+    responses=inline_serializer("BackupFetchResult", {
+        "encrypted_bundle": drf_serializers.CharField(),
+        "updated_at": drf_serializers.DateTimeField(),
+        "mailbox_id": drf_serializers.CharField(),
+    }),
+)
+@api_view(["POST"])
+@authentication_classes([])
+@permission_classes([AllowAny])
+@throttle_classes([BackupThrottle])
+def fetch_backup(request):
+    """Unauthenticated by identity (a fresh device has none yet) but
+    gated on proof of phone ownership via a recovery-purpose
+    registration_token — the same SMS-verification /v1/recover uses.
+    Unlike /v1/recover, this never mints or replaces an Identity; it
+    only returns whatever encrypted blob (if any) this phone number
+    previously uploaded via /v1/backup, for the client to decrypt
+    locally with its Encryption ID.
+    """
+    from django.conf import settings as dj_settings
+    if not dj_settings.SMS["REQUIRE_SMS_VERIFICATION"]:
+        return Response(
+            {"detail": "account recovery is unavailable on this deployment"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    from apps.smsverify.models import PhoneDirectoryEntry, RegistrationToken
+
+    ser = BackupFetchSerializer(data=request.data)
+    ser.is_valid(raise_exception=True)
+
+    tok = ser.validated_data["registration_token"]
+    rt = RegistrationToken.objects.filter(token=tok).first()
+    if rt is None or not rt.is_valid() or rt.purpose != "recovery":
+        return Response({"detail": "valid recovery registration_token required"},
+                        status=status.HTTP_403_FORBIDDEN)
+    rt.consumed = True
+    rt.save(update_fields=["consumed"])
+
+    backup = IdentityBackup.objects.filter(msisdn_hash=rt.msisdn_hash).first()
+    if backup is None:
+        return Response({"detail": "no backup found for this number"},
+                        status=status.HTTP_404_NOT_FOUND)
+    # The client needs its own mailbox_id back too (the encrypted
+    # bundle only carries the Ed25519/X25519 seeds) — same
+    # PhoneDirectoryEntry /v1/recover already relies on to resolve a
+    # phone number to its current identity.
+    entry = PhoneDirectoryEntry.objects.filter(msisdn_hash=rt.msisdn_hash).first()
+    data = IdentityBackupSerializer(backup).data
+    data["mailbox_id"] = entry.mailbox_id if entry else None
     return Response(data)

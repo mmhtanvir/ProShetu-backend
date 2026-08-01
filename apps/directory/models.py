@@ -56,3 +56,23 @@ class PreKeyBundle(models.Model):
         self.one_time_prekeys = pool
         self.save(update_fields=["one_time_prekeys", "updated_at"])
         return otk
+
+
+class IdentityBackup(models.Model):
+    """An opaque, client-encrypted copy of a user's Ed25519/X25519 seed
+    material, keyed by phone number hash (not mailbox_id) so a brand
+    new device — which by definition has no identity/mailbox_id yet —
+    can still look its own backup up after proving phone ownership via
+    the same SMS-verification flow /v1/recover uses.
+
+    `encrypted_bundle` is opaque base64 to this server: it's encrypted
+    client-side (Argon2id + ChaCha20-Poly1305, see
+    lib/infrastructure/crypto/device_keys.dart's exportEncrypted/
+    importFromBackup) under a passphrase ("Encryption ID") the user
+    chose and that never leaves the device. This table cannot be used
+    to recover anyone's keys without that passphrase — same
+    zero-knowledge property as the rest of this backend.
+    """
+    msisdn_hash = models.CharField(max_length=64, unique=True, db_index=True)
+    encrypted_bundle = models.TextField()
+    updated_at = models.DateTimeField(auto_now=True)

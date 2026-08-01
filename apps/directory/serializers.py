@@ -1,7 +1,7 @@
 from rest_framework import serializers
 
 from apps.common.validators import validate_hex
-from .models import Identity, PreKeyBundle
+from .models import Identity, IdentityBackup, PreKeyBundle
 
 
 class RegisterSerializer(serializers.Serializer):
@@ -89,3 +89,24 @@ class PreKeyBundleSerializer(serializers.ModelSerializer):
         # Popping happens in the view within a transaction; the view attaches
         # the taken OTK here to avoid double-pop.
         return self.context.get("one_time_prekey")
+
+
+class BackupUploadSerializer(serializers.Serializer):
+    """Body for POST /v1/backup (authenticated). `encrypted_bundle` is
+    opaque base64 — see IdentityBackup's docstring."""
+    encrypted_bundle = serializers.CharField(max_length=8192)
+
+
+class BackupFetchSerializer(serializers.Serializer):
+    """Body for POST /v1/backup/fetch. Reuses a recovery-purpose
+    registration_token (same SMS-verification token /v1/recover
+    consumes) purely to prove phone ownership — this endpoint never
+    mints or replaces an identity, it only returns whatever encrypted
+    blob (if any) was previously uploaded for that phone number."""
+    registration_token = serializers.CharField()
+
+
+class IdentityBackupSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = IdentityBackup
+        fields = ["encrypted_bundle", "updated_at"]

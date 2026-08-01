@@ -101,6 +101,7 @@ REST_FRAMEWORK = {
         "sms": "10/hour",
         "idv": "60/hour",
         "fcm": "60/hour",
+        "backup": "30/hour",
     },
     "UNAUTHENTICATED_USER": None,
     "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
