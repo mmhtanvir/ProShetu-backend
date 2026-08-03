@@ -99,7 +99,9 @@ def verify_code(request):
     request=inline_serializer("SmsLookup", {"msisdn": drf_serializers.CharField()}),
     responses=inline_serializer("SmsLookupResult", {
         "mailbox_id": drf_serializers.CharField(),
-        "display_name": drf_serializers.CharField()}))
+        "display_name": drf_serializers.CharField(),
+        "ed25519_pub": drf_serializers.CharField(),
+        "x25519_pub": drf_serializers.CharField()}))
 @api_view(["POST"])
 @throttle_classes([SmsThrottle])
 def lookup_by_phone(request):
@@ -110,6 +112,18 @@ def lookup_by_phone(request):
     the pre-identity signup flow) reverse lookup: does this phone
     number belong to a registered account? 404 if not found or the
     number never completed SMS-verified registration.
+
+    Returns the account's Ed25519/X25519 public keys alongside
+    mailbox_id/display_name — NOT optional extras. Without them pinned
+    into the caller's ContactDirectoryStore, this contact's very first
+    incoming message can never be resolved: E2eCryptoService's sealed-
+    sender INITIAL-message handshake identifies the sender by looking
+    up a contact whose x25519_pub matches the header (see
+    lib/infrastructure/crypto/e2e_crypto_service.dart's
+    _decryptInitial), and a contact added without these keys can never
+    match, so the message is silently dropped forever. The QR-pairing
+    path already includes both keys for exactly this reason; this
+    endpoint was missing them.
     """
     msisdn = str(request.data.get("msisdn", "")).strip()
     if not msisdn:
@@ -126,7 +140,17 @@ def lookup_by_phone(request):
     if entry is None:
         return Response({"detail": "no account found for this number"},
                         status=status.HTTP_404_NOT_FOUND)
+    from apps.directory.models import Identity
+    identity = Identity.objects.filter(mailbox_id=entry.mailbox_id).first()
+    if identity is None:
+        # PhoneDirectoryEntry outlived its Identity (shouldn't happen —
+        # nothing deletes Identity rows — but this entry is useless
+        # without the keys, so treat it the same as "not found").
+        return Response({"detail": "no account found for this number"},
+                        status=status.HTTP_404_NOT_FOUND)
     return Response({
         "mailbox_id": entry.mailbox_id,
         "display_name": entry.display_name,
+        "ed25519_pub": identity.ed25519_pub,
+        "x25519_pub": identity.x25519_pub,
     })

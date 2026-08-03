@@ -172,9 +172,11 @@ class SmsVerifyTests(TestCase):
                             format="json").json()["registration_token"]
         sign = SigningKey.generate()
         dh = PrivateKey.generate()
+        ed_pub = sign.verify_key.encode().hex()
+        x_pub = bytes(dh.public_key).hex()
         r = self.api.post("/v1/register", {
-            "ed25519_pub": sign.verify_key.encode().hex(),
-            "x25519_pub": bytes(dh.public_key).hex(),
+            "ed25519_pub": ed_pub,
+            "x25519_pub": x_pub,
             "registration_token": tok,
             "display_name": "Ava Patel",
         }, format="json")
@@ -187,6 +189,7 @@ class SmsVerifyTests(TestCase):
         self.assertEqual(found.status_code, 200, found.content)
         self.assertEqual(found.json(), {
             "mailbox_id": mailbox_id, "display_name": "Ava Patel",
+            "ed25519_pub": ed_pub, "x25519_pub": x_pub,
         })
 
     @override_settings(SMS=BASE_SMS)
